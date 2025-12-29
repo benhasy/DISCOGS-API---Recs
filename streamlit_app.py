@@ -36,8 +36,9 @@ st.set_page_config(
 # CONFIGURABLE PARAMETERS
 # ============================================================
 
-# === EDIT THESE PATHS ===
-BASE_PATH = "/Users/benhasy/Documents/UNI/Foundations of AI/api/PROCESSING_CSVS"
+# Paths 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_PATH = os.path.join(SCRIPT_DIR, "PROCESSING_CSVS")
 COMBINED_PATH = os.path.join(BASE_PATH, "_combined")
 
 # Method weights
