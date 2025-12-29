@@ -1,0 +1,52 @@
+# GIT PUSH INSTRUCTIONS
+# For: https://github.com/benhasy/DISCOGS-API---Recs.git
+
+## Quick Push (after making changes)
+
+```bash
+cd "/Users/benhasy/Documents/UNI/Foundations of AI/api"
+git add .
+git commit -m "Your commit message here"
+git push
+```
+
+## If you add new large files (>50MB)
+
+Git LFS is already tracking *.csv and *.pkl files.
+If you add a new large file type, track it first:
+
+```bash
+git lfs track "*.newextension"
+git add .gitattributes
+```
+
+## Check what's being tracked by LFS
+
+```bash
+git lfs ls-files
+```
+
+## Check status before committing
+
+```bash
+git status
+```
+
+## View commit history
+
+```bash
+git log --oneline
+```
+
+## If push fails
+
+```bash
+git pull --rebase
+git push
+```
+
+## Notes
+
+- Large files (*.csv, *.pkl) are handled by Git LFS
+- GitHub free tier: 1GB LFS storage, 1GB bandwidth/month
+- Check LFS usage: https://github.com/settings/billing
