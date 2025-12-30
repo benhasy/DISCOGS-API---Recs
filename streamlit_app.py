@@ -39,12 +39,12 @@ st.set_page_config(
 # ============================================================
 
 # Paths 
+# Download data from dataset repo on startup
 DATA_PATH = snapshot_download(
     repo_id="benhasy/intelligent-crate-digging-data",
     repo_type="dataset"
 )
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_PATH = os.path.join(DATA_PATH, "PROCESSING_CSVS")
 COMBINED_PATH = os.path.join(BASE_PATH, "_combined")
 
@@ -431,12 +431,13 @@ class RecommendationEngine:
     
     def get_recommendations(self, seed_idx, n=50, exclude_same_artist=False):
         seed_row = self.df.iloc[seed_idx]
+        seed_actual_idx = self.df.index[seed_idx]
         seed_artists = set(a.lower() for a in (seed_row['artists_list'] if isinstance(seed_row['artists_list'], list) else []))
         
         candidates = []
         
         for idx, candidate_row in self.df.iterrows():
-            if idx == seed_idx:
+            if idx == seed_actual_idx:
                 continue
             
             if exclude_same_artist:
@@ -494,7 +495,7 @@ def main():
     st.markdown("*A Hybrid Music Recommendation System For Underground Electronic DJs. Enjoy! - Hasy*")
     
     # Sidebar
-    st.sidebar.header("🔧 Settings")
+    st.sidebar.header("⚙️ Settings")
     
     # Format selection - capitalised with "All" at top
     formats_raw = get_available_formats()
