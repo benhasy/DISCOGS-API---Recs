@@ -2,7 +2,7 @@
 INTELLIGENT CRATE DIGGING - STREAMLIT APP
 A Hybrid Music Recommendation System For Underground Electronic DJs
 
-Run locally with: streamlit run streamlit_app.py
+Run locally with: streamlit run streamlit_app_local_2.py
 """
 
 import streamlit as st
@@ -39,13 +39,7 @@ st.set_page_config(
 # ============================================================
 
 # Paths 
-# Download data from dataset repo on startup
-DATA_PATH = snapshot_download(
-    repo_id="benhasy/intelligent-crate-digging-data",
-    repo_type="dataset"
-)
-
-BASE_PATH = os.path.join(DATA_PATH, "PROCESSING_CSVS")
+BASE_PATH = "/Users/benhasy/Documents/UNI/Foundations of AI/api/PROCESSING_CSVS"
 COMBINED_PATH = os.path.join(BASE_PATH, "_combined")
 
 # Method weights
