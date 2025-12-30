@@ -5,3 +5,4 @@ numpy>=1.24.0
 rapidfuzz>=3.0.0
 streamlit>=1.28.0
 matplotlib>=3.7.0
+huggingface_hub>=0.16.4huggingface_hub

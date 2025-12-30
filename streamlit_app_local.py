@@ -13,8 +13,6 @@ import re
 import random
 import os
 from collections import defaultdict
-from huggingface_hub import snapshot_download
-
 
 # Optional: fuzzy matching
 try:
@@ -38,14 +36,8 @@ st.set_page_config(
 # CONFIGURABLE PARAMETERS
 # ============================================================
 
-# Paths 
-DATA_PATH = snapshot_download(
-    repo_id="benhasy/intelligent-crate-digging-data",
-    repo_type="dataset"
-)
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_PATH = os.path.join(DATA_PATH, "PROCESSING_CSVS")
+# Paths
+BASE_PATH = "/Users/benhasy/Documents/UNI/Foundations of AI/api/PROCESSING_CSVS"
 COMBINED_PATH = os.path.join(BASE_PATH, "_combined")
 
 # Method weights
