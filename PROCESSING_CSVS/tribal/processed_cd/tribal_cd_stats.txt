@@ -1,6 +1,6 @@
 total_releases: 12088
-unique_artists: 6302
-unique_labels: 19397
-graph_nodes: 25699
-graph_edges: 257298
-n_clusters: 100
+unique_artists: 6411
+unique_labels: 19393
+graph_nodes: 25804
+graph_edges: 270123
+n_clusters: 1000

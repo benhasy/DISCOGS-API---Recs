@@ -1,6 +1,6 @@
 total_releases: 138
-unique_artists: 90
+unique_artists: 93
 unique_labels: 88
-graph_nodes: 178
-graph_edges: 542
+graph_nodes: 181
+graph_edges: 818
 n_clusters: 13
