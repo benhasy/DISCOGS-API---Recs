@@ -46,7 +46,7 @@ DATA_PATH = snapshot_download(
     repo_type="dataset"
 )
 
-BASE_PATH = os.path.join(DATA_PATH, "PROCESSING_CSVS")
+BASE_PATH = DATA_PATH
 COMBINED_PATH = os.path.join(BASE_PATH, "_combined")
 
 # Method weights for Discogs recommendations
@@ -229,7 +229,12 @@ def parse_artists(artist_string):
     separators = [
         ' feat. ', ' Feat. ', ' ft. ', ' Ft. ',
         ' vs ', ' vs. ', ' Vs ', ' Vs. ',
-        ' x ', ' X ', ' & ', ' and ', ', ', ','
+        ' x ', ' X ',
+        ' & ',
+        ' and ', ' And ', ' AND ',
+        ', ',
+        '/', ' / ',
+        ','
     ]
     
     artists = [artist_string]
@@ -759,13 +764,20 @@ class RecommendationEngine:
         if not seed_artists or not cand_artists:
             return 0, []
         
+        # Skip non-artist entries
+        skip_artists = {'various', 'various artists', 'unknown', 'unknown artist', 'no artist'}
+        
         best_score = 0
         best_reason = []
         
         for s_artist in seed_artists:
+            if s_artist.lower() in skip_artists:
+                continue
             if s_artist not in self.graph:
                 continue
             for c_artist in cand_artists:
+                if c_artist.lower() in skip_artists:
+                    continue
                 if c_artist not in self.graph or s_artist.lower() == c_artist.lower():
                     continue
                 
@@ -781,8 +793,10 @@ class RecommendationEngine:
                     try:
                         path = nx.shortest_path(self.graph, s_artist, c_artist)
                         if len(path) == 3 and HOP_2_SCORE > best_score:
-                            best_score = HOP_2_SCORE
-                            best_reason = [f"connected via {path[1][:15]}..."]
+                            # Skip if middle node is Various
+                            if path[1].lower() not in skip_artists:
+                                best_score = HOP_2_SCORE
+                                best_reason = [f"connected via {path[1][:15]}..."]
                     except nx.NetworkXNoPath:
                         pass
         
@@ -875,18 +889,90 @@ class RecommendationEngine:
         top_5 = candidates[:5]
         top_5_indices = {c['idx'] for c in top_5}
         
-        # Discovery picks: same label, low similarity
-        same_label_candidates = [c for c in candidates if c['same_label'] and c['idx'] not in top_5_indices]
+        # Discovery picks: combine two strategies
         discovery = []
+        
+        # Strategy 1: Same label, different vibe (low similarity)
+        same_label_candidates = [c for c in candidates if c['same_label'] and c['idx'] not in top_5_indices]
+        label_discoveries = []
         
         for threshold in [0.15, 0.25, 0.35, 0.40]:
             discovery_pool = [c for c in same_label_candidates if c['score'] <= threshold]
-            if len(discovery_pool) >= 5:
-                discovery = random.sample(discovery_pool, 5)
+            if len(discovery_pool) >= 3:
+                label_discoveries = random.sample(discovery_pool, min(3, len(discovery_pool)))
                 break
         else:
             if len(same_label_candidates) > 0:
-                discovery = random.sample(same_label_candidates, min(5, len(same_label_candidates)))
+                label_discoveries = random.sample(same_label_candidates, min(3, len(same_label_candidates)))
+        
+        # Add discovery reason
+        for d in label_discoveries:
+            d['discovery_reason'] = 'same label, different style'
+        
+        # Strategy 2: 2-hop graph connections (if graph available)
+        graph_discoveries = []
+        
+        # Skip non-artist entries
+        skip_artists = {'various', 'various artists', 'unknown', 'unknown artist', 'no artist'}
+        
+        if self.graph is not None:
+            # Find candidates with 2-hop connections that aren't already in top 5 or label discoveries
+            label_discovery_indices = {d['idx'] for d in label_discoveries}
+            two_hop_candidates = []
+            
+            # Use ORIGINAL case artists for graph lookup (graph stores original case)
+            seed_artists_original = seed_row['artists_list'] if isinstance(seed_row['artists_list'], list) else []
+            
+            for c in candidates:
+                if c['idx'] in top_5_indices or c['idx'] in label_discovery_indices:
+                    continue
+                
+                cand_artists = c['row']['artists_list'] if isinstance(c['row']['artists_list'], list) else []
+                
+                found_path = False
+                for s_artist in seed_artists_original:
+                    if s_artist.lower() in skip_artists:
+                        continue
+                    if s_artist not in self.graph or found_path:
+                        continue
+                    
+                    for c_artist in cand_artists:
+                        if c_artist.lower() in skip_artists:
+                            continue
+                        if c_artist not in self.graph:
+                            continue
+                        
+                        # Check if 2-hop connection exists
+                        try:
+                            path = nx.shortest_path(self.graph, s_artist, c_artist)
+                            if len(path) == 3:  # Exactly 2 hops
+                                middle_artist = path[1]
+                                # Skip if middle node is Various
+                                if middle_artist.lower() not in skip_artists:
+                                    c['discovery_reason'] = f"connected via {middle_artist[:20]}"
+                                    two_hop_candidates.append(c)
+                                    found_path = True
+                                    break
+                        except nx.NetworkXNoPath:
+                            continue
+            
+            # Pick 2 random from 2-hop candidates (prefer lower similarity for variety)
+            if two_hop_candidates:
+                two_hop_candidates.sort(key=lambda x: x['score'])  # Sort by score (low to high)
+                graph_discoveries = random.sample(two_hop_candidates[:10], min(2, len(two_hop_candidates)))
+        
+        # Combine both strategies
+        discovery = label_discoveries + graph_discoveries
+        
+        # If we don't have 5 discoveries yet, fill with remaining same_label candidates
+        if len(discovery) < 5 and same_label_candidates:
+            remaining = [c for c in same_label_candidates if c not in discovery]
+            if remaining:
+                needed = 5 - len(discovery)
+                additional = random.sample(remaining, min(needed, len(remaining)))
+                for d in additional:
+                    d['discovery_reason'] = 'same label, different style'
+                discovery.extend(additional)
         
         for d in discovery:
             d['is_discovery'] = True
@@ -1054,7 +1140,38 @@ def main():
                 
                 selected_idx = st.session_state['selected_release_idx']
                 
-                engine = RecommendationEngine(filtered_df, graph=None)
+                # Load knowledge graph if specific style selected
+                graph_to_use = None
+
+                if selected_primary_style != 'All':
+                    folder_name = get_folder_name(selected_primary_style)
+                    
+                    # Determine which graph to load based on format selection
+                    if selected_format == 'formats':
+                        # User selected "All formats" - use combined graph at style root
+                        graph_file = f"{folder_name}_all_formats_graph.pkl"
+                        graph_path = os.path.join(BASE_PATH, folder_name, graph_file)
+                        format_display = "all formats"
+                    else:
+                        # User selected specific format - look in processed subfolder
+                        graph_file = f"{folder_name}_{selected_format}_graph.pkl"
+                        graph_path = os.path.join(BASE_PATH, folder_name, f"processed_{selected_format}", graph_file)
+                        format_display = selected_format
+                    
+                    with st.spinner("Loading knowledge graph..."):
+                        if os.path.exists(graph_path):
+                            with open(graph_path, 'rb') as f:
+                                graph_to_use = pickle.load(f)
+                    
+                    if graph_to_use:
+                        st.success(f"✅ Using knowledge graph for {selected_primary_style} {format_display}")
+                        st.caption(f"Graph: {graph_to_use.number_of_nodes():,} nodes, {graph_to_use.number_of_edges():,} edges")
+                    else:
+                        st.warning(f"⚠️ No knowledge graph found for {selected_primary_style} {format_display}")
+                else:
+                    st.info("ℹ️ Knowledge graph disabled - select a specific style to enable")
+
+                engine = RecommendationEngine(filtered_df, graph=graph_to_use)
                 
                 if selected_idx in filtered_df.index:
                     position = filtered_df.index.get_loc(selected_idx)
@@ -1082,7 +1199,7 @@ def main():
                                         label_display = str(row['label'])[:50] + '...' if pd.notna(row['label']) and len(str(row['label'])) > 50 else row['label']
                                         st.caption(f"Label: {label_display}")
                                         if reasons:
-                                            st.caption(f"💡 {', '.join(reasons[:3])}")
+                                            st.caption(f"💡 {', '.join(reasons[:5])}")
                                     
                                     with col2:
                                         st.metric("Score", f"{score:.2f}")
@@ -1095,7 +1212,7 @@ def main():
                         
                         if results['discovery']:
                             st.subheader("🔮 Discovery Picks")
-                            st.caption("Same label, different vibe - deep cuts to explore")
+                            st.caption("Hidden connections: same-label deep cuts + artists linked through collaborations")
                             for i, rec in enumerate(results['discovery'], 1):
                                 row = rec['row']
                                 score = rec['score']
@@ -1110,7 +1227,10 @@ def main():
                                         label_display = str(row['label'])[:50] + '...' if pd.notna(row['label']) and len(str(row['label'])) > 50 else row['label']
                                         st.caption(f"Label: {label_display}")
                                         if reasons:
-                                            st.caption(f"💡 {', '.join(reasons[:3])}")
+                                            st.caption(f"💡 {', '.join(reasons[:5])}")
+                                        # Show discovery reason
+                                        if rec.get('discovery_reason'):
+                                            st.caption(f"🔮 Discovery: {rec['discovery_reason']}")
                                     
                                     with col2:
                                         st.metric("Score", f"{score:.2f}")
@@ -1139,7 +1259,7 @@ def main():
                                         label_display = str(row['label'])[:50] + '...' if pd.notna(row['label']) and len(str(row['label'])) > 50 else row['label']
                                         st.caption(f"Label: {label_display}")
                                         if reasons:
-                                            st.caption(f"💡 {', '.join(reasons[:3])}")
+                                            st.caption(f"💡 {', '.join(reasons[:5])}")
                                     
                                     with col2:
                                         st.metric("Score", f"{score:.2f}")
@@ -1216,28 +1336,38 @@ def main():
         
         st.info("💡 **Tip:** For best Discogs recommendations, ensure your tracks have complete metadata (Artist, Label, Year, Genre).")
         
-        # File uploader
-        uploaded_file = st.file_uploader("Upload Rekordbox XML", type=['xml'], key="xml_upload")
+        st.warning("⚠️ **Hugging Face Users:** File uploads may not work on the hosted version. Please use **'Paste XML content'** instead. Both options work when running locally.")
         
-        if uploaded_file is not None:
-            # Parse XML
-            xml_content = uploaded_file.read().decode('utf-8')
-            
+        # Two options: file upload or paste
+        upload_method = st.radio("Choose input method:", ["Upload XML file", "Paste XML content"], horizontal=True)
+        
+        xml_content = None
+        
+        if upload_method == "Upload XML file":
+            uploaded_file = st.file_uploader("Upload Rekordbox XML", type=['xml'], key="xml_upload")
+            if uploaded_file is not None:
+                xml_content = uploaded_file.read().decode('utf-8')
+        else:
+            st.markdown("Paste your Rekordbox XML content below:")
+            pasted_xml = st.text_area("XML Content", height=200, placeholder="<?xml version='1.0'...>", key="xml_paste")
+            if pasted_xml and (pasted_xml.strip().startswith("<?xml") or pasted_xml.strip().startswith("<DJ_PLAYLISTS")):
+                xml_content = pasted_xml
+            elif pasted_xml:
+                st.warning("This doesn't look like valid XML. Make sure it starts with <?xml or <DJ_PLAYLISTS")
+        
+        if xml_content:
             with st.spinner("Parsing XML..."):
                 library_df = parse_rekordbox_xml(xml_content)
             
             if library_df is None or len(library_df) == 0:
-                st.error("No tracks found in the XML file. Please check the file format.")
+                st.error("No tracks found in the XML. Please check the file format.")
             else:
                 st.success(f"✅ Loaded {len(library_df)} tracks from your library")
                 
-                # Store in session state
                 st.session_state['library_df'] = library_df
                 
-                # Display library
                 st.subheader("Your Library")
                 
-                # Create display dataframe
                 display_df = library_df.copy()
                 display_df['#'] = range(1, len(display_df) + 1)
                 display_df['BPM'] = display_df['bpm'].apply(lambda x: f"{x:.1f}" if pd.notna(x) else 'N/A')
@@ -1248,7 +1378,6 @@ def main():
                 display_df['Year'] = display_df['year'].apply(lambda x: str(int(x)) if pd.notna(x) else 'N/A')
                 display_df['Genre'] = display_df['genre'].apply(lambda x: x if x else 'N/A')
                 
-                # Show table
                 st.dataframe(
                     display_df[['#', 'Artist', 'Title', 'BPM', 'Key', 'Label', 'Year', 'Genre']],
                     hide_index=True,
@@ -1258,10 +1387,8 @@ def main():
                 
                 st.divider()
                 
-                # Track selection
                 st.subheader("Get Recommendations")
                 
-                # Create selection options
                 track_options = [f"{i+1}. {row['artist']} - {row['title']}" for i, row in library_df.iterrows()]
                 
                 selected_track = st.selectbox("Select a track", track_options, key="xml_track_select")
@@ -1270,7 +1397,6 @@ def main():
                     selected_idx = int(selected_track.split('.')[0]) - 1
                     seed_track = library_df.iloc[selected_idx]
                     
-                    # Display selected track info
                     st.markdown("**Selected Track:**")
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
@@ -1285,14 +1411,12 @@ def main():
                     if st.button("🎵 Find Recommendations", key="xml_get_recs"):
                         st.session_state['xml_selected_idx'] = selected_idx
                 
-                # Show recommendations
                 if 'xml_selected_idx' in st.session_state:
                     selected_idx = st.session_state['xml_selected_idx']
                     seed_track = library_df.iloc[selected_idx]
                     
                     st.divider()
                     
-                    # ---- MIX-COMPATIBLE TRACKS ----
                     st.subheader("🎧 Mix-Compatible Tracks (from your library)")
                     
                     if seed_track['bpm'] is None or seed_track['key_camelot'] is None:
@@ -1316,11 +1440,9 @@ def main():
                         else:
                             st.info("No mix-compatible tracks found in your library for this track.")
                     
-                    # ---- DISCOGS RECOMMENDATIONS ----
                     st.divider()
                     st.subheader("💿 Related Discogs Releases")
                     
-                    # Check what metadata is available
                     has_artist = bool(seed_track.get('artist') and str(seed_track['artist']).strip())
                     has_label = bool(seed_track.get('label') and str(seed_track['label']).strip())
                     has_year = bool(seed_track.get('year') and pd.notna(seed_track['year']))
@@ -1360,7 +1482,7 @@ def main():
                                         label_display = str(row['label'])[:50] + '...' if pd.notna(row['label']) and len(str(row['label'])) > 50 else row['label']
                                         st.caption(f"Label: {label_display}")
                                         if reasons:
-                                            st.caption(f"💡 {', '.join(reasons[:3])}")
+                                            st.caption(f"💡 {', '.join(reasons[:5])}")
                                     
                                     with col2:
                                         st.metric("Score", f"{score:.2f}")
@@ -1373,7 +1495,6 @@ def main():
                         else:
                             st.info("No matching Discogs releases found. Try adding more metadata to your track.")
                         
-                        # Discovery picks (only if label data available)
                         if discovery and has_label:
                             st.markdown("**🔮 Discovery Picks** (same label, different vibe)")
                             for i, match in enumerate(discovery, 1):
@@ -1390,7 +1511,7 @@ def main():
                                         label_display = str(row['label'])[:50] + '...' if pd.notna(row['label']) and len(str(row['label'])) > 50 else row['label']
                                         st.caption(f"Label: {label_display}")
                                         if reasons:
-                                            st.caption(f"💡 {', '.join(reasons[:3])}")
+                                            st.caption(f"💡 {', '.join(reasons[:5])}")
                                     
                                     with col2:
                                         st.metric("Score", f"{score:.2f}")
@@ -1405,7 +1526,7 @@ def main():
             st.markdown("""
             1. Open Rekordbox
             2. Go to **File** → **Export Collection in xml format**
-            3. Save the file and upload it here
+            3. Save the file and upload it here (or paste the contents)
             """)
 
 
